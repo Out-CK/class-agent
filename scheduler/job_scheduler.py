@@ -20,6 +20,15 @@ def run_class_run() -> None:
         logger.error(f"Scheduled Class Run failed: {e}", exc_info=True)
 
 
+def run_venue_enricher() -> None:
+    from agent.venue_enricher import VenueEnricher
+    logger.info("Scheduled Venue Enricher triggered")
+    try:
+        VenueEnricher(event_type="class").run()
+    except Exception as e:
+        logger.error(f"Scheduled Venue Enricher failed: {e}", exc_info=True)
+
+
 def start_scheduler() -> None:
     scheduler = BackgroundScheduler(timezone=eastern)
     scheduler.add_job(
@@ -29,8 +38,16 @@ def start_scheduler() -> None:
         name="Daily NYC Class Run",
         replace_existing=True,
     )
+    scheduler.add_job(
+        run_venue_enricher,
+        trigger=CronTrigger(hour=10, minute=30, timezone=eastern),
+        id="daily_venue_enricher",
+        name="Daily Venue Enricher",
+        replace_existing=True,
+    )
     scheduler.start()
     logger.info("Scheduler started — Class Run fires daily at 10:00 America/New_York")
+    logger.info("Venue Enricher fires daily at 10:30 America/New_York")
     logger.info("Press Ctrl+C to stop")
     try:
         while True:

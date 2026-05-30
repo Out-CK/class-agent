@@ -166,6 +166,43 @@ def delete_event_entry(event_entry_id: str) -> None:
         raise
 
 
+def get_unmapped_venues(event_type: str) -> dict[str, list[str]]:
+    """Return {venue_name: [event_entry_id, ...]} for future events of a given type with no lat/lng."""
+    client = get_supabase_client()
+    today_str = date.today().strftime("%m-%d-%Y")
+    try:
+        result = (
+            client.table("event_entry_database")
+            .select("event_entry_id, venue")
+            .is_("lat", "null")
+            .eq("event_type", event_type)
+            .gte("date", today_str)
+            .execute()
+        )
+        venues: dict[str, list[str]] = {}
+        for r in result.data or []:
+            venue = r.get("venue") or ""
+            if venue:
+                venues.setdefault(venue, []).append(r["event_entry_id"])
+        return venues
+    except Exception as e:
+        logger.error(f"Failed to fetch unmapped venues: {e}")
+        return {}
+
+
+def update_venue_coords(venue: str, lat: float, lng: float, address: str) -> None:
+    """Update lat, lng, and address for all events with the given venue name and no coords."""
+    client = get_supabase_client()
+    try:
+        client.table("event_entry_database").update(
+            {"lat": lat, "lng": lng, "address": address}
+        ).eq("venue", venue).is_("lat", "null").execute()
+        logger.info(f"Updated coords for venue '{venue}': ({lat}, {lng})")
+    except Exception as e:
+        logger.error(f"Failed to update coords for venue '{venue}': {e}")
+        raise
+
+
 # ---------------------------------------------------------------------------
 # Past Event Entry Database
 # ---------------------------------------------------------------------------
