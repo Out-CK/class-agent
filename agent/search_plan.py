@@ -51,30 +51,11 @@ class SearchPlanAgent:
         self._llm = ChatAnthropic(model=MODEL).with_structured_output(SearchPlan)
 
     def generate(self) -> SearchPlan:
-        logger.info("Generating 40-query Class Search Plan…")
-        for attempt in range(2):
-            try:
-                plan: SearchPlan = self._llm.invoke(
-                    [{"role": "user", "content": SYSTEM_PROMPT}]
-                )
-                if len(plan.queries) != 40:
-                    logger.warning(
-                        f"Search plan returned {len(plan.queries)} queries (expected 40). "
-                        f"Attempt {attempt + 1}/2."
-                    )
-                    if attempt == 1:
-                        raise ValueError(
-                            f"LLM produced {len(plan.queries)} queries after 2 attempts; expected 40."
-                        )
-                    continue
-                logger.info(f"Class Search Plan generated with {len(plan.queries)} queries")
-                for i, q in enumerate(plan.queries, 1):
-                    logger.debug(f"  [{i:02d}] [{q.query_type}] {q.query}")
-                return plan
-            except ValueError:
-                raise
-            except Exception as e:
-                logger.error(f"Search Plan LLM call failed on attempt {attempt + 1}: {e}")
-                if attempt == 1:
-                    raise
-        raise RuntimeError("Class Search Plan generation failed unexpectedly")
+        logger.info("Generating Class Search Plan…")
+        plan: SearchPlan = self._llm.invoke(
+            [{"role": "user", "content": SYSTEM_PROMPT}]
+        )
+        logger.info(f"Class Search Plan generated with {len(plan.queries)} queries")
+        for i, q in enumerate(plan.queries, 1):
+            logger.debug(f"  [{i:02d}] [{q.query_type}] {q.query}")
+        return plan
