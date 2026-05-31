@@ -14,6 +14,7 @@ from agent.duplicate_finder import DuplicateFinder
 from agent.link_finder import LinkFinderAgent
 from agent.past_event_archiver import PastEventArchiver
 from agent.search_plan import SearchPlanAgent
+from agent.seed_providers import crawl_seed_providers
 from agent.web_batch_parser import EventEntry, WebBatchParser
 from db.operations import insert_event_entries, insert_web_batch, get_existing_venue_coords
 from db.supabase_client import get_supabase_client
@@ -42,6 +43,7 @@ class ClassAgent:
 
         stats = {
             "queries_executed": 0,
+            "pages_seed": 0,
             "pages_round1": 0,
             "pages_round2": 0,
             "entries_parsed": 0,
@@ -50,6 +52,43 @@ class ClassAgent:
             "entries_inserted": 0,
             "entries_archived": 0,
         }
+
+        seen_urls: set[str] = set()
+        web_batch: list[dict] = []
+
+        # Step 0 — Crawl Seed Providers
+        self._step_log("Step 0: Crawl Seed Providers")
+        try:
+            seed_results = asyncio.run(
+                crawl_seed_providers(self._extract_tool, existing_urls=seen_urls)
+            )
+            for r in seed_results:
+                if r["url"] not in seen_urls:
+                    seen_urls.add(r["url"])
+                    web_batch.append(r)
+            stats["pages_seed"] = len(seed_results)
+            logger.info(f"Seed Providers: {len(seed_results)} pages collected")
+        except Exception as e:
+            logger.error(f"Step 0 failed: {e}")
+
+        # Step 0b — Store Seed Provider Web Batch
+        self._step_log("Step 0b: Store Seed Provider Web Batch")
+        seed_batch = [r for r in web_batch if r.get("query_used") == "seed_provider"]
+        if seed_batch:
+            try:
+                db_records_seed = [
+                    {
+                        "web_batch_id": web_batch_id,
+                        "source_url": r["url"],
+                        "query_used": "seed_provider",
+                        "round": 0,
+                        "content": r.get("content", ""),
+                    }
+                    for r in seed_batch
+                ]
+                insert_web_batch(db_records_seed)
+            except Exception as e:
+                logger.error(f"Step 0b failed: {e}")
 
         # Step 1 — Generate Search Plan
         self._step_log("Step 1: Generate Search Plan")
@@ -66,21 +105,19 @@ class ClassAgent:
                 self._run_searches_concurrent(search_plan.queries)
             )
             stats["queries_executed"] = len(search_plan.queries)
-            seen_urls: set[str] = set()
-            web_batch: list[dict] = []
             for result in round1_results:
                 if result["url"] not in seen_urls:
                     seen_urls.add(result["url"])
                     web_batch.append(result)
-            stats["pages_round1"] = len(web_batch)
-            logger.info(f"Round 1: {len(web_batch)} unique pages collected")
+            stats["pages_round1"] = len(web_batch) - stats["pages_seed"]
+            logger.info(f"Round 1: {stats['pages_round1']} unique pages collected")
         except Exception as e:
             logger.error(f"Step 2 failed: {e}")
-            web_batch = []
 
         # Step 3 — Store Round 1 Web Batch
         self._step_log("Step 3: Store Round 1 Web Batch")
-        if web_batch:
+        round1_batch = [r for r in web_batch if r.get("query_used") != "seed_provider"]
+        if round1_batch:
             try:
                 db_records = [
                     {
@@ -90,7 +127,7 @@ class ClassAgent:
                         "round": 1,
                         "content": r.get("content", ""),
                     }
-                    for r in web_batch
+                    for r in round1_batch
                 ]
                 insert_web_batch(db_records)
             except Exception as e:
@@ -167,6 +204,14 @@ class ClassAgent:
         except Exception as e:
             logger.error(f"Step 7b failed: {e}")
 
+        # Step 7c — Media Enrichment
+        self._step_log("Step 7c: Media Enrichment")
+        try:
+            from agent.media_enricher import MediaEnricher
+            entry_batch = MediaEnricher().enrich(entry_batch)
+        except Exception as e:
+            logger.error(f"Step 7c failed: {e}")
+
         # Step 8 — Intra-Batch Deduplication
         self._step_log("Step 8: Intra-Batch Deduplication")
         dup_finder = DuplicateFinder(id_generator)
@@ -212,6 +257,7 @@ class ClassAgent:
         logger.info(
             f"=== Class Run COMPLETE | entry_batch_id={entry_batch_id} | "
             f"duration={duration:.1f}s ===\n"
+            f"  Pages fetched (Seed):      {stats['pages_seed']}\n"
             f"  Queries executed:          {stats['queries_executed']}\n"
             f"  Pages fetched (Round 1):   {stats['pages_round1']}\n"
             f"  Pages fetched (Round 2):   {stats['pages_round2']}\n"
